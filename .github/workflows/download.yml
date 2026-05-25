@@ -99,7 +99,7 @@ jobs:
 
       - name: Create archive chunks (95MB each)
         run: |
-          7z a -tzip -p"${{ github.event.inputs.zip_password }}" -mem=AES256 -mx=3 "archive_full.zip" "${{ env.ORIGINAL_NAME }}"
+          7z a -tzip -p"${{ github.event.inputs.zip_password }}" -mem=ZipCrypto -mx=0 "archive_full.zip" "${{ env.ORIGINAL_NAME }}"
           split -b 95M -d --suffix-length=3 --numeric-suffixes=1 "archive_full.zip" "archive.zip."
           rm -f "archive_full.zip"
 
