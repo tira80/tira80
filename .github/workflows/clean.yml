@@ -15,32 +15,32 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GH_TOKEN }}
 
-      - name: Delete branches older than 3 hours (for branches without expires_at)
+      - name: Delete branches older than 3 hours
         run: |
           NOW=$(date +%s)
           THREE_HOURS_AGO=$((NOW - 10800))
 
-          git branch -r | grep 'origin/user_' | while read branch; do
-            timestamp=$(echo "$branch" | grep -oP 'user_.*_\\K\\d+')
+          git branch -r | grep -E 'origin/(user_|vip_)' | while read branch; do
+            branch_name=${branch#origin/}
+            timestamp=$(echo "$branch_name" | grep -oE '[0-9]{10,}' | tail -1)
             if [ -n "$timestamp" ]; then
               if [ "$timestamp" -lt "$THREE_HOURS_AGO" ]; then
-                branch_name=${branch#origin/}
-                echo "Deleting old branch without expiry: $branch_name (created at $timestamp)"
-                git push origin --delete "$branch_name"
-                USER_ID=$(echo "$branch_name" | sed 's/user_\\(.*\\)_.*/\\1/')
-                curl -s -X POST "https://telegram-file-bot.gptmoone.workers.dev/api/cleanup" \
+                echo "Deleting old branch: $branch_name (created at $timestamp)"
+                git push origin --delete "$branch_name" || echo "Failed to delete $branch_name"
+                USER_ID=$(echo "$branch_name" | sed 's/^[^_]*_[^_]*_\([0-9]*\)_.*/\1/')
+                curl -s -X POST "${{ secrets.WORKER_URL }}/api/cleanup" \
                   -H "Content-Type: application/json" \
                   -d "{\"user_id\":\"$USER_ID\"}" || echo "Failed to notify worker for $USER_ID"
               else
-                echo "Skipping $branch (timestamp $timestamp) - not expired yet"
+                echo "Skipping $branch_name (timestamp $timestamp) - not expired yet"
               fi
             else
-              echo "Skipping $branch - no timestamp found"
+              echo "Skipping $branch_name - no timestamp found"
             fi
           done
 
       - name: Delete branches with expires_at from D1 (via Worker API)
         run: |
-          curl -X POST "https://telegram-file-bot.gptmoone.workers.dev/api/cleanup-branches" \
+          curl -X POST "${{ secrets.WORKER_URL }}/api/cleanup-branches" \
             -H "Content-Type: application/json" \
             -d "{\"secret\":\"${{ secrets.ADMIN_SECRET }}\"}"
