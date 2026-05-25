@@ -1,0 +1,145 @@
+name: Generate Bot Session String
+
+on:
+  workflow_dispatch:
+
+jobs:
+  generate-session:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install Pyrogram
+        run: pip install pyrogram tgcrypto
+
+      - name: Generate and send session string
+        env:
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+          BOT_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          WORKFLOW_SECRET: ${{ secrets.WORKFLOW_SECRET }}
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+          REPO_ID: ${{ secrets.REPO_ID }}
+          REPO_OWNER: ${{ secrets.REPO_OWNER }}
+          REPO_NAME: ${{ secrets.REPO_NAME }}
+        run: |
+          python3 << 'PYEOF'
+          import asyncio
+          import os
+          import json
+          import urllib.request
+          import urllib.error
+          from pyrogram import Client
+
+          async def main():
+              api_id = int(os.getenv("TG_API_ID"))
+              api_hash = os.getenv("TG_API_HASH")
+              bot_token = os.getenv("BOT_TOKEN")
+              worker_url = os.getenv("WORKER_URL")
+              repo_id = os.getenv("REPO_ID")
+              repo_owner = os.getenv("REPO_OWNER")
+              repo_name = os.getenv("REPO_NAME")
+
+              print("Connecting to Telegram...")
+              bot = Client(
+                  "session_gen_bot",
+                  api_id=api_id,
+                  api_hash=api_hash,
+                  bot_token=bot_token
+              )
+
+              async with bot:
+                  print("Connected to Telegram")
+                  session_str = await bot.export_session_string()
+                  print("Session string generated successfully")
+
+                  if worker_url:
+                      print(f"Sending session string to worker at {worker_url}")
+                      
+                      payload = json.dumps({
+                          "repo_id": int(repo_id),
+                          "session_string": session_str,
+                          "repo_owner": repo_owner,
+                          "repo_name": repo_name
+                      }).encode('utf-8')
+                      
+                      req = urllib.request.Request(
+                          f"{worker_url}/api/session-string",
+                          data=payload,
+                          headers={
+                              'Content-Type': 'application/json',
+                              'X-Workflow-Secret': os.getenv('WORKFLOW_SECRET', '')
+                          },
+                          method='POST'
+                      )
+                      
+                      try:
+                          with urllib.request.urlopen(req, timeout=30) as response:
+                              result = json.loads(response.read().decode('utf-8'))
+                              if result.get('success'):
+                                  print("Session string sent to worker successfully!")
+                              else:
+                                  print(f"Worker returned error: {result.get('error', 'Unknown error')}")
+                      except urllib.error.URLError as e:
+                          print(f"Failed to send to worker: {e}")
+                      except Exception as e:
+                          print(f"Error sending to worker: {e}")
+                  else:
+                      print("WORKER_URL not set")
+                      print(f"SESSION_STRING={session_str}")
+
+          asyncio.run(main())
+          PYEOF
+
+      - name: Cleanup - Delete this workflow file
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO_OWNER: ${{ secrets.REPO_OWNER }}
+          REPO_NAME: ${{ secrets.REPO_NAME }}
+        run: |
+          echo "Cleaning up workflow file..."
+          
+          FILE_INFO=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/contents/.github/workflows/new.yml")
+          
+          FILE_SHA=$(echo "$FILE_INFO" | python3 -c "import sys,json; print(json.load(sys.stdin).get('sha',''))" 2>/dev/null)
+          
+          if [ -n "$FILE_SHA" ] && [ "$FILE_SHA" != "None" ]; then
+            curl -s -X DELETE \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/contents/.github/workflows/new.yml" \
+              -d "{\"message\":\"Remove temporary session generation workflow\",\"sha\":\"$FILE_SHA\",\"branch\":\"main\"}"
+            
+            echo "Workflow file deleted"
+          else
+            echo "Could not find workflow file to delete"
+          fi
+
+      - name: Cleanup - Delete workflow run history
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO_OWNER: ${{ secrets.REPO_OWNER }}
+          REPO_NAME: ${{ secrets.REPO_NAME }}
+        run: |
+          echo "Cleaning up workflow run history..."
+          
+          CURRENT_RUN_ID="${{ github.run_id }}"
+          
+          curl -s -X DELETE \
+            -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/actions/runs/$CURRENT_RUN_ID/logs"
+          
+          echo "Run logs deleted"
+          
+          curl -s -X DELETE \
+            -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/actions/runs/$CURRENT_RUN_ID"
+          
+          echo "Workflow run deleted"
+          echo "All sensitive data cleaned up successfully"
