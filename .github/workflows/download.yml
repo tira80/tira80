@@ -1,0 +1,174 @@
+name: Download and Split for User
+
+on:
+  workflow_dispatch:
+    inputs:
+      file_url:
+        description: 'لینک مستقیم فایل (در صورت وجود)'
+        required: false
+        type: string
+      file_id:
+        description: 'شناسه فایل تلگرام (در صورت آپلود مستقیم)'
+        required: false
+        type: string
+      zip_password:
+        description: 'رمز عبور ZIP'
+        required: true
+        type: string
+      user_id:
+        description: 'شناسه کاربر'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Worker that job started
+        run: |
+          curl -X POST "https://telegram-file-bot.gptmoone.workers.dev/api/started" \
+            -H "Content-Type: application/json" \
+            -d "{\"user_id\":\"${{ github.event.inputs.user_id }}\"}"
+
+      - name: Optimized Checkout (fast)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y p7zip-full
+          pip install pyrogram tgcrypto
+
+      - name: Download file (Link OR Telegram File ID)
+        env:
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+          TG_SESSION_STRING: ${{ secrets.TG_SESSION_STRING }}
+          INPUT_FILE_URL: ${{ github.event.inputs.file_url }}
+          INPUT_FILE_ID: ${{ github.event.inputs.file_id }}
+        run: |
+          if [ -n "$INPUT_FILE_URL" ] && [ "$INPUT_FILE_URL" != "null" ] && [ "$INPUT_FILE_URL" != "" ]; then
+            echo "Using HTTP Link download..."
+            ORIGINAL_NAME=$(basename "$INPUT_FILE_URL" | cut -d '?' -f1)
+            [ -z "$ORIGINAL_NAME" ] && ORIGINAL_NAME="downloaded_file"
+            echo "ORIGINAL_NAME=$ORIGINAL_NAME" >> $GITHUB_ENV
+            wget -c -t 20 -T 60 --retry-connrefused --waitretry=5 -O "$ORIGINAL_NAME" "$INPUT_FILE_URL"
+          elif [ -n "$INPUT_FILE_ID" ] && [ "$INPUT_FILE_ID" != "null" ] && [ "$INPUT_FILE_ID" != "" ]; then
+            echo "Using Direct Telegram Download via MTProto..."
+            cat << 'EOF' > dl_script.py
+          import os, asyncio
+          from pyrogram import Client
+
+          async def main():
+              api_id = int(os.environ['TG_API_ID'])
+              api_hash = os.environ['TG_API_HASH']
+              session_string = os.environ['TG_SESSION_STRING']
+              file_id = os.environ['INPUT_FILE_ID']
+              
+              app = Client("my_bot_session", session_string=session_string, api_id=api_id, api_hash=api_hash)
+              async with app:
+                  print("Connected directly to Telegram via Session String! Downloading file...")
+                  file_path = await app.download_media(file_id)
+                  if file_path:
+                      print(f"Downloaded successfully to: {file_path}")
+                      with open("filename.txt", "w") as f:
+                          f.write(file_path)
+                  else:
+                      print("Download failed via Pyrogram!")
+                      exit(1)
+
+          asyncio.run(main())
+          EOF
+            python dl_script.py
+            ORIGINAL_NAME=$(cat filename.txt)
+            echo "ORIGINAL_NAME=$ORIGINAL_NAME" >> $GITHUB_ENV
+          else
+            echo "No file_url or file_id provided!"
+            exit 1
+          fi
+          
+          if [ ! -s "${ORIGINAL_NAME:-downloaded_file}" ]; then
+            echo "Downloaded file is empty or missing!"
+            exit 1
+          fi
+          echo "Download completed successfully"
+
+      - name: Create archive chunks (95MB each)
+        run: |
+          7z a -tzip -p"${{ github.event.inputs.zip_password }}" -mem=AES256 -mx=3 "archive_full.zip" "${{ env.ORIGINAL_NAME }}"
+          split -b 95M -d --suffix-length=3 --numeric-suffixes=1 "archive_full.zip" "archive.zip."
+          rm -f "archive_full.zip"
+
+      - name: Clean up original file
+        run: rm -f "${{ env.ORIGINAL_NAME }}"
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Get total chunks count
+        id: chunks
+        run: |
+          CHUNKS=$(ls archive.zip.* 2>/dev/null | wc -l)
+          echo "total_chunks=$CHUNKS" >> $GITHUB_OUTPUT
+
+      - name: Notify Worker about total chunks
+        run: |
+          curl -X POST "https://telegram-file-bot.gptmoone.workers.dev/api/progress" \
+            -H "Content-Type: application/json" \
+            -d "{\"user_id\":\"${{ github.event.inputs.user_id }}\", \"total_chunks\":${{ steps.chunks.outputs.total_chunks }}}"
+
+      - name: Create user branch
+        run: |
+          BRANCH_NAME="user_${{ github.event.inputs.user_id }}_$(date +%s)"
+          git checkout --orphan "$BRANCH_NAME"
+          git rm -rf . 2>/dev/null || true
+          echo "# Files for user ${{ github.event.inputs.user_id }}" > README.md
+          chunks=(archive.zip.*)
+          total=${#chunks[@]}
+          batch_size=2
+          start=0
+          uploaded=0
+          while [ $start -lt $total ]; do
+            end=$((start + batch_size - 1))
+            [ $end -ge $total ] && end=$((total - 1))
+            for i in $(seq $start $end); do
+              git add "${chunks[$i]}"
+            done
+            git add README.md
+            git commit -m "Add chunks $((start+1))-$((end+1)) of $total"
+            for attempt in {1..5}; do
+              if git push origin "$BRANCH_NAME"; then
+                echo "Push successful for chunks $((start+1))-$((end+1))"
+                uploaded=$((end+1))
+                break
+              else
+                echo "Push failed (attempt $attempt), retrying in 10 seconds..."
+                sleep 10
+              fi
+            done
+            curl -X POST "https://telegram-file-bot.gptmoone.workers.dev/api/progress" \
+              -H "Content-Type: application/json" \
+              -d "{\"user_id\":\"${{ github.event.inputs.user_id }}\", \"uploaded_chunks\":$uploaded}"
+            start=$((end + 1))
+            sleep 2
+          done
+          echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
+
+      - name: Notify Worker that job is done
+        run: |
+          curl -X POST "https://telegram-file-bot.gptmoone.workers.dev/api/complete" \
+            -H "Content-Type: application/json" \
+            -d "{\"user_id\":\"${{ github.event.inputs.user_id }}\", \"branch\":\"${{ env.BRANCH_NAME }}\"}"
+
+      - name: Notify Worker on failure
+        if: failure()
+        run: |
+          curl -X POST "https://telegram-file-bot.gptmoone.workers.dev/api/failed" \
+            -H "Content-Type: application/json" \
+            -d "{\"user_id\":\"${{ github.event.inputs.user_id }}\", \"error\":\"Workflow failed\"}"
