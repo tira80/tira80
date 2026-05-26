@@ -104,11 +104,11 @@ jobs:
         run: |
           COOKIE_ARG=""
           [ -f cookies.txt ] && COOKIE_ARG="--cookies cookies.txt"
-          MAX_BYTES=$(( ${MAX_SIZE_MB:-4096} * 1024 * 1024 ))
+          MAX_BYTES=$(( \${MAX_SIZE_MB:-4096} * 1024 * 1024 ))
           SELECTED=""
           for q in 1080 720 480 360 240 144; do
-            if [ $q -le ${DESIRED_Q:-720} ] && [ $q -ge ${MIN_Q:-360} ]; then
-              SIZE_INFO=$(yt-dlp $COOKIE_ARG --format "bestvideo[height<=${q}]+bestaudio/best[height<=${q}]" --print "%(filesize,filesize_approx)s" "$YT_URL" 2>/dev/null || echo "0")
+            if [ $q -le \${DESIRED_Q:-720} ] && [ $q -ge \${MIN_Q:-360} ]; then
+              SIZE_INFO=$(yt-dlp $COOKIE_ARG --format "bestvideo[height<=\${q}]+bestaudio/best[height<=\${q}]" --print "%(filesize,filesize_approx)s" "$YT_URL" 2>/dev/null || echo "0")
               FILE_SIZE=$(echo "$SIZE_INFO" | head -1 | tr -d '[:space:]')
               [ -z "$FILE_SIZE" ] || [ "$FILE_SIZE" = "NA" ] || [ "$FILE_SIZE" = "None" ] && FILE_SIZE=0
               if [ "$FILE_SIZE" -eq 0 ] 2>/dev/null || [ "$FILE_SIZE" -le "$MAX_BYTES" ] 2>/dev/null; then
@@ -117,7 +117,7 @@ jobs:
               fi
             fi
           done
-          [ -z "$SELECTED" ] && SELECTED=${MIN_Q:-360}
+          [ -z "$SELECTED" ] && SELECTED=\${MIN_Q:-360}
           echo "selected_quality=$SELECTED" >> $GITHUB_ENV
         shell: bash
 
@@ -132,7 +132,7 @@ jobs:
           COOKIE_ARG=""
           [ -f cookies.txt ] && COOKIE_ARG="--cookies cookies.txt"
           yt-dlp $COOKIE_ARG \
-            --format "bestvideo[height<=${SELECTED_QUALITY}]+bestaudio/best[height<=${SELECTED_QUALITY}]" \
+            --format "bestvideo[height<=\${SELECTED_QUALITY}]+bestaudio/best[height<=\${SELECTED_QUALITY}]" \
             --merge-output-format mp4 --output "video.%(ext)s" --no-playlist \
             --retries 5 --fragment-retries 5 --retry-sleep 5 "$YT_URL"
           VIDEO_FILE=$(ls video.* 2>/dev/null | head -1)
@@ -188,7 +188,7 @@ jobs:
             echo "No file_url or file_id provided!"
             exit 1
           fi
-          [ ! -s "${ORIGINAL_NAME:-downloaded_file}" ] && { echo "Downloaded file is empty or missing!"; exit 1; }
+          [ ! -s "\${ORIGINAL_NAME:-downloaded_file}" ] && { echo "Downloaded file is empty or missing!"; exit 1; }
           FILE_SIZE=$(stat -c%s "$ORIGINAL_NAME" 2>/dev/null || echo "0")
           echo "ORIGINAL_NAME=$ORIGINAL_NAME" >> $GITHUB_ENV
           echo "DOWNLOAD_SIZE=$FILE_SIZE" >> $GITHUB_ENV
@@ -224,7 +224,7 @@ jobs:
           echo "# Files for user ${{ github.event.inputs.user_id }}" > README.md
 
           chunks=(archive.7z.*)
-          total=${#chunks[@]}
+          total=\${#chunks[@]}
           [ $total -eq 0 ] && { chunks=(archive.7z); total=1; }
 
           curl -s -X POST "${{ github.event.inputs.callback_url || secrets.WORKER_URL }}/api/progress" -H "Content-Type: application/json" \
@@ -234,7 +234,7 @@ jobs:
           while [ $start -lt $total ]; do
             end=$((start + batch_size - 1))
             [ $end -ge $total ] && end=$((total - 1))
-            for i in $(seq $start $end); do git add "${chunks[$i]}" 2>/dev/null || true; done
+            for i in $(seq $start $end); do git add "\${chunks[$i]}" 2>/dev/null || true; done
             git add README.md
             git commit -m "Add chunks $((start+1))-$((end+1)) of $total"
             for attempt in {1..5}; do
