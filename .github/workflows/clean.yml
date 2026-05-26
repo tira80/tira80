@@ -28,7 +28,7 @@ jobs:
                 echo "Deleting old branch: $branch_name (created at $timestamp)"
                 git push origin --delete "$branch_name" || echo "Failed to delete $branch_name"
                 USER_ID=$(echo "$branch_name" | sed 's/^[^_]*_[^_]*_\([0-9]*\)_.*/\1/')
-                curl -s -X POST "${{ github.event.inputs.callback_url || secrets.WORKER_URL }}/api/cleanup" \
+                curl -s -X POST "${{ secrets.WORKER_URL }}/api/cleanup" \
                   -H "Content-Type: application/json" \
                   -d "{\"user_id\":\"$USER_ID\"}" || echo "Failed to notify worker for $USER_ID"
               else
@@ -41,6 +41,6 @@ jobs:
 
       - name: Delete branches with expires_at from D1 (via Worker API)
         run: |
-          curl -X POST "${{ github.event.inputs.callback_url || secrets.WORKER_URL }}/api/cleanup-branches" \
+          curl -X POST "${{ secrets.WORKER_URL }}/api/cleanup-branches" \
             -H "Content-Type: application/json" \
             -d "{\"secret\":\"${{ secrets.ADMIN_SECRET }}\"}"
