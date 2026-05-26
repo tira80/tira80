@@ -69,7 +69,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y p7zip-full wget
+          sudo apt-get update -qq && sudo apt-get install -y p7zip-full wget zip
           pip install pyrogram tgcrypto --quiet --break-system-packages || pip install pyrogram tgcrypto --quiet
 
       - name: Setup yt-dlp
@@ -193,7 +193,15 @@ jobs:
         run: |
           curl -s -X POST "${{ secrets.WORKER_URL }}/api/progress" -H "Content-Type: application/json" \
             -d "{\"user_id\":\"${{ github.event.inputs.user_id }}\",\"stage\":\"compress\",\"percent\":55}" || true
-          7z a -p"${{ github.event.inputs.zip_password }}" -mhe=on -mx=1 -v95m "archive.7z" "${{ env.ORIGINAL_NAME }}"
+          
+          # قدم ۱: ساخت فایل زیپ بدون فشردگی و با رمز ساده
+          zip -0 -P "${{ github.event.inputs.zip_password }}" "archive_full.zip" "${{ env.ORIGINAL_NAME }}"
+          
+          # قدم ۲: تکه‌تکه کردن فایل با فرمت archive.zip.001, archive.zip.002
+          split -b 95M -d --numeric-suffixes=1 -a 3 "archive_full.zip" "archive.zip."
+          
+          # قدم ۳: پاک کردن فایل‌های اولیه برای آزادسازی فضا
+          rm -f "archive_full.zip"
           rm -f "${{ env.ORIGINAL_NAME }}"
 
       - name: Configure git
@@ -204,7 +212,7 @@ jobs:
       - name: Get total chunks count
         id: chunks
         run: |
-          CHUNKS=$(ls archive.7z.* 2>/dev/null | wc -l)
+          CHUNKS=$(ls archive.zip.* 2>/dev/null | wc -l)
           [ "$CHUNKS" -eq 0 ] && CHUNKS=1
           echo "total_chunks=$CHUNKS" >> $GITHUB_OUTPUT
 
@@ -218,9 +226,9 @@ jobs:
           git rm -rf . 2>/dev/null || true
           echo "# Files for user ${{ github.event.inputs.user_id }}" > README.md
 
-          chunks=(archive.7z.*)
+          chunks=(archive.zip.*)
           total=${#chunks[@]}
-          [ $total -eq 0 ] && { chunks=(archive.7z); total=1; }
+          [ $total -eq 0 ] && { chunks=(archive.zip.001); total=1; }
 
           curl -s -X POST "${{ secrets.WORKER_URL }}/api/progress" -H "Content-Type: application/json" \
             -d "{\"user_id\":\"${{ github.event.inputs.user_id }}\",\"stage\":\"upload\",\"percent\":70,\"total_chunks\":$total}" || true
