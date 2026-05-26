@@ -48,6 +48,10 @@ on:
         description: 'شناسه کاربر'
         required: true
         type: string
+      callback_url:
+        description: 'آدرس Worker برای callback (اختیاری، جایگزین WORKER_URL)'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -59,7 +63,7 @@ jobs:
     steps:
       - name: Notify Worker that job started
         run: |
-          curl -s -X POST "${{ secrets.WORKER_URL }}/api/started" \
+          curl -s -X POST "${{ github.event.inputs.callback_url || secrets.WORKER_URL }}/api/started" \
             -H "Content-Type: application/json" \
             -d "{\"user_id\":\"${{ github.event.inputs.user_id }}\"}" || true
 
@@ -123,7 +127,7 @@ jobs:
           YT_URL: ${{ github.event.inputs.media_url }}
           SELECTED_QUALITY: ${{ env.selected_quality }}
         run: |
-          curl -s -X POST "${{ secrets.WORKER_URL }}/api/progress" -H "Content-Type: application/json" \
+          curl -s -X POST "${{ github.event.inputs.callback_url || secrets.WORKER_URL }}/api/progress" -H "Content-Type: application/json" \
             -d "{\"user_id\":\"${{ github.event.inputs.user_id }}\",\"stage\":\"download\",\"percent\":10}" || true
           COOKIE_ARG=""
           [ -f cookies.txt ] && COOKIE_ARG="--cookies cookies.txt"
@@ -147,7 +151,7 @@ jobs:
           INPUT_FILE_URL: ${{ github.event.inputs.file_url }}
           INPUT_FILE_ID: ${{ github.event.inputs.file_id }}
         run: |
-          curl -s -X POST "${{ secrets.WORKER_URL }}/api/progress" -H "Content-Type: application/json" \
+          curl -s -X POST "${{ github.event.inputs.callback_url || secrets.WORKER_URL }}/api/progress" -H "Content-Type: application/json" \
             -d "{\"user_id\":\"${{ github.event.inputs.user_id }}\",\"stage\":\"download\",\"percent\":10}" || true
           if [ -n "$INPUT_FILE_URL" ] && [ "$INPUT_FILE_URL" != "null" ] && [ "$INPUT_FILE_URL" != "" ]; then
             echo "Using HTTP Link download..."
@@ -192,7 +196,7 @@ jobs:
 
       - name: Create archive chunks (95MB each)
         run: |
-          curl -s -X POST "${{ secrets.WORKER_URL }}/api/progress" -H "Content-Type: application/json" \
+          curl -s -X POST "${{ github.event.inputs.callback_url || secrets.WORKER_URL }}/api/progress" -H "Content-Type: application/json" \
             -d "{\"user_id\":\"${{ github.event.inputs.user_id }}\",\"stage\":\"compress\",\"percent\":55}" || true
           7z a -p"${{ github.event.inputs.zip_password }}" -mhe=on -mx=1 -v95m "archive.7z" "${{ env.ORIGINAL_NAME }}"
           rm -f "${{ env.ORIGINAL_NAME }}"
@@ -223,7 +227,7 @@ jobs:
           total=${#chunks[@]}
           [ $total -eq 0 ] && { chunks=(archive.7z); total=1; }
 
-          curl -s -X POST "${{ secrets.WORKER_URL }}/api/progress" -H "Content-Type: application/json" \
+          curl -s -X POST "${{ github.event.inputs.callback_url || secrets.WORKER_URL }}/api/progress" -H "Content-Type: application/json" \
             -d "{\"user_id\":\"${{ github.event.inputs.user_id }}\",\"stage\":\"upload\",\"percent\":70,\"total_chunks\":$total}" || true
 
           batch_size=2; start=0; uploaded=0
@@ -239,7 +243,7 @@ jobs:
             done
             uploaded=$((end+1))
             PERCENT=$((70 + uploaded * 28 / total))
-            curl -s -X POST "${{ secrets.WORKER_URL }}/api/progress" -H "Content-Type: application/json" \
+            curl -s -X POST "${{ github.event.inputs.callback_url || secrets.WORKER_URL }}/api/progress" -H "Content-Type: application/json" \
               -d "{\"user_id\":\"${{ github.event.inputs.user_id }}\",\"stage\":\"upload\",\"percent\":$PERCENT,\"uploaded_chunks\":$uploaded}" || true
             start=$((end + 1)); sleep 2
           done
@@ -249,13 +253,13 @@ jobs:
       - name: Notify Worker that job is done
         if: success()
         run: |
-          curl -s -X POST "${{ secrets.WORKER_URL }}/api/complete" \
+          curl -s -X POST "${{ github.event.inputs.callback_url || secrets.WORKER_URL }}/api/complete" \
             -H "Content-Type: application/json" \
             -d "{\"user_id\":\"${{ github.event.inputs.user_id }}\",\"branch\":\"${{ env.BRANCH_NAME }}\",\"file_size\":${{ env.DOWNLOAD_SIZE }}}"
 
       - name: Notify Worker on failure
         if: failure()
         run: |
-          curl -s -X POST "${{ secrets.WORKER_URL }}/api/failed" \
+          curl -s -X POST "${{ github.event.inputs.callback_url || secrets.WORKER_URL }}/api/failed" \
             -H "Content-Type: application/json" \
             -d "{\"user_id\":\"${{ github.event.inputs.user_id }}\",\"error\":\"Workflow failed\"}"
